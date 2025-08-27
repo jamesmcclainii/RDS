@@ -1,0 +1,166 @@
+# VPC-jammcc5761 + RDS Integration (us-west-2)
+# Change description: Adds RDS MySQL instance to the baseline VPC by introducing
+#   - AWS::RDS::DBSubnetGroup (RdsDbSubnetGroup)
+#   - AWS::EC2::SecurityGroup for MySQL 3306 (RdsSecurityGroup)
+#   - AWS::RDS::DBInstance (RdsInstance, non-public)
+# Also adds RdsEndpoint to Outputs.
+# Revision: 1.1.0
+# Date: 2025-08-27
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC-jammcc5761 in us-west-2 with three public subnets, IGW, public routing, and a lab RDS instance.
+
+Resources:
+  # --- Core VPC ---
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761
+
+  # --- Internet access layer ---
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-igw
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # --- Public subnets across three AZs in us-west-2 ---
+  PublicSubnetAzA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs 'us-west-2']
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-public-a
+
+  PublicSubnetAzB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs 'us-west-2']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-public-b
+
+  PublicSubnetAzC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [2, !GetAZs 'us-west-2']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-public-c
+
+  # --- Shared public routing for all public subnets ---
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-public-rt
+
+  DefaultRouteToInternet:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  AssocPublicSubnetAzA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzA
+      RouteTableId: !Ref PublicRouteTable
+
+  AssocPublicSubnetAzB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzB
+      RouteTableId: !Ref PublicRouteTable
+
+  AssocPublicSubnetAzC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzC
+      RouteTableId: !Ref PublicRouteTable
+
+  # --- RDS support: DB subnet group (using the three subnets above) ---
+  RdsDbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for RDS in VPC-jammcc5761
+      SubnetIds:
+        - !Ref PublicSubnetAzA
+        - !Ref PublicSubnetAzB
+        - !Ref PublicSubnetAzC
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-rds-subnets
+
+  # --- RDS support: Security group for MySQL (lab-friendly; tighten later) ---
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL to RDS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: VPC-jammcc5761-rds-sg
+
+  # --- RDS instance (from rds-starter.yaml, wired to SG + subnet group) ---
+  RdsInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: '5'
+      DBInstanceClass: db.t3.micro
+      DBInstanceIdentifier: playground-db
+      Engine: MySQL
+      MasterUsername: Admin
+      MasterUserPassword: 'CloudAcademy123!'
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroup
+      DBSubnetGroupName: !Ref RdsDbSubnetGroup
+      PubliclyAccessible: false
+
+Outputs:
+  VpcId:
+    Description: ID of VPC-jammcc5761
+    Value: !Ref VPC
+
+  PublicSubnetIds:
+    Description: Comma-separated public subnet IDs in AZ order (A, B, C)
+    Value: !Join
+      - ","
+      - - !Ref PublicSubnetAzA
+        - !Ref PublicSubnetAzB
+        - !Ref PublicSubnetAzC
+
+  RdsEndpoint:
+    Description: RDS endpoint address
+    Value: !GetAtt RdsInstance.Endpoint.Address
